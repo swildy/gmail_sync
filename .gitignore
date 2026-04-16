@@ -1,0 +1,7 @@
+credentials.json 
+gmail_sync_errors.log 
+gmail_sync.log 
+run_gmail_sync.log 
+state.db 
+token.json
+__pycache__
