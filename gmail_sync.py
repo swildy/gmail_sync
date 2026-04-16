@@ -280,7 +280,7 @@ def connect_imap(host, port, user, password):
 @retryable
 def get_uids(imap_conn, folder="INBOX"):
     imap_conn.select(folder)
-    typ, data = imap_conn.search(None, "ALL")
+    typ, data = imap_conn.uid('search', None, "ALL")
     if typ != "OK":
         return {}
     return data[0].split()
@@ -295,7 +295,8 @@ def fetch_header_fields(imap_conn, uid, fields):
     # Quote the field names to avoid Yahoo IMAP parser bugs
     fields_quoted = ' '.join([f'"{field}"' for field in fields])
     try:
-        typ, msg_data = imap_conn.fetch(uid, f"(BODY.PEEK[HEADER.FIELDS ({fields_quoted})])")
+        #typ, msg_data = imap_conn.fetch(uid, f"(BODY.PEEK[HEADER.FIELDS ({fields_quoted})])")
+        typ, msg_data = imap_conn.uid('fetch', uid, f"(BODY.PEEK[HEADER.FIELDS ({fields_quoted})])")
         if typ != "OK" or not msg_data or msg_data[0] is None:
             return h_fields
         raw = msg_data[0][1]
@@ -317,7 +318,8 @@ def fetch_header_fields(imap_conn, uid, fields):
 def fetch_header_field(imap_conn, uid, field):
     # Quote the field name to avoid Yahoo IMAP parser bugs
     field_quoted = f'"{field}"'
-    typ, msg_data = imap_conn.fetch(uid, f"(BODY.PEEK[HEADER.FIELDS ({field_quoted})])")
+    #typ, msg_data = imap_conn.fetch(uid, f"(BODY.PEEK[HEADER.FIELDS ({field_quoted})])")
+    typ, msg_data = imap_conn.uid('fetch', uid, f"(BODY.PEEK[HEADER.FIELDS ({field_quoted})])")
     if typ != "OK" or not msg_data or msg_data[0] is None:
         return None
 
@@ -330,14 +332,16 @@ def fetch_header_field(imap_conn, uid, field):
 
 @retryable
 def fetch_headers(imap_conn, uid):
-    typ, msg_data = imap_conn.fetch(uid, "(BODY.PEEK[HEADER])")
+    #typ, msg_data = imap_conn.fetch(uid, "(BODY.PEEK[HEADER])")
+    typ, msg_data = imap_conn.uid('fetch', uid, "(BODY.PEEK[HEADER])")
     if typ != "OK":
         return None
     return msg_data[0][1].decode(errors="replace")
 
 @retryable
 def fetch_full_message(imap_conn, uid):
-    typ, msg_data = imap_conn.fetch(uid, "(BODY.PEEK[])")
+    #typ, msg_data = imap_conn.fetch(uid, "(BODY.PEEK[])")
+    typ, msg_data = imap_conn.uid('fetch', uid, "(BODY.PEEK[])")
     if typ != "OK":
         return None
     return msg_data[0][1]
@@ -361,14 +365,15 @@ def append_to_gmail(gmail_conn, raw_msg, internaldate, label=None, seen=False):
 def delete_from_yahoo(yahoo_conn, uid):
     # first copy to trash so it shows up immediately
     logger.info("    copying msg to Trash folder")
-    yahoo_conn.copy(uid, '"Trash"')
+    yahoo_conn.uid('COPY', uid, '"Trash"')
     # then delete original 
     logger.info("    deleting msg from Inbox")
-    yahoo_conn.store(uid, "+FLAGS", "\\Deleted")
+    yahoo_conn.uid('STORE', uid, "+FLAGS", "\\Deleted")
 
 @retryable
 def get_internaldate_raw(imap_conn, uid):
-    typ, msg_data = imap_conn.fetch(uid, "(INTERNALDATE)")
+    #typ, msg_data = imap_conn.fetch(uid, "(INTERNALDATE)")
+    typ, msg_data = imap_conn.uid('fetch', uid, "(INTERNALDATE)")
     if typ != "OK" or not msg_data:
         return None
 
@@ -390,7 +395,8 @@ def get_internaldate_raw(imap_conn, uid):
 
 @retryable
 def yahoo_is_seen(imap_conn, uid):
-    typ, msg_data = imap_conn.fetch(uid, "(FLAGS)")
+    #typ, msg_data = imap_conn.fetch(uid, "(FLAGS)")
+    typ, msg_data = imap_conn.uid('fetch', uid, "(FLAGS)")
     if typ != "OK":
         return False
 
