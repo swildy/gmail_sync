@@ -1,4 +1,4 @@
-# gmail_yahoo_sync
+# gmail_sync
 Sync job to import yahoo email into gmail. Replaces gmailify pop import, now that it's shutting down. This is a one-way sync.
 
 Notes: 
