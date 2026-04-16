@@ -286,6 +286,34 @@ def get_uids(imap_conn, folder="INBOX"):
     return data[0].split()
 
 @retryable
+def fetch_header_fields(imap_conn, uid, fields):
+    """ 
+    Takes list of fields to fetch from header. 
+    Returns dictionary of header field values.
+    """
+    h_fields = dict.fromkeys(fields, None)
+    # Quote the field names to avoid Yahoo IMAP parser bugs
+    fields_quoted = ' '.join([f'"{field}"' for field in fields])
+    try:
+        typ, msg_data = imap_conn.fetch(uid, f"(BODY.PEEK[HEADER.FIELDS ({fields_quoted})])")
+        if typ != "OK" or not msg_data or msg_data[0] is None:
+            return h_fields
+        raw = msg_data[0][1]
+        if not raw:
+            return h_fields
+        data = BytesParser(policy=default_policy).parsebytes(raw)
+        for field in fields:
+            if field in data:
+                h_fields[field] = data[field]
+    except Exception as e:
+        if "CLIENTBUG" in str(e):
+            logger.error(f"Yahoo returned CLIENTBUG for UID {uid} - skipping")
+            return h_fields
+        raise
+    return h_fields
+
+
+@retryable
 def fetch_header_field(imap_conn, uid, field):
     # Quote the field name to avoid Yahoo IMAP parser bugs
     field_quoted = f'"{field}"'
@@ -332,8 +360,10 @@ def append_to_gmail(gmail_conn, raw_msg, internaldate, label=None, seen=False):
 @retryable
 def delete_from_yahoo(yahoo_conn, uid):
     # first copy to trash so it shows up immediately
+    logger.info("    copying msg to Trash folder")
     yahoo_conn.copy(uid, '"Trash"')
     # then delete original 
+    logger.info("    deleting msg from Inbox")
     yahoo_conn.store(uid, "+FLAGS", "\\Deleted")
 
 @retryable
@@ -429,8 +459,17 @@ def main():
 
                 uid_str = uid.decode()
 
+                # Fetch message headers for filtering
+                logger.info(f"Fetching header fields for uid {uid} ({uid_str})")
+                head_fields = fetch_header_fields(yahoo, uid, ["MESSAGE-ID", "SUBJECT", "DATE"])
+                message_id = head_fields["MESSAGE-ID"]
+                subject    = head_fields["SUBJECT"]
+                date_hdr   = head_fields["DATE"]
+                if not message_id or not date_hdr:
+                    continue   # skip this uid
+
                 # Fetch Message-ID
-                message_id = fetch_header_field(yahoo, uid, "MESSAGE-ID")
+                #message_id = fetch_header_field(yahoo, uid, "MESSAGE-ID")
                 if not message_id:
                     logger.info(f"Skipping UID {uid_str} (no Message-ID)")
                     continue
@@ -441,15 +480,15 @@ def main():
                     continue
 
                 # Fetch subject
-                subject = fetch_header_field(yahoo, uid, "SUBJECT")
+                #subject = fetch_header_field(yahoo, uid, "SUBJECT")
 
                 # Test mode filter
                 if MODE == "test" and subject != TEST_SUBJECT:
-                    logger.info(f"[TEST MODE] Skipping non-test message: {subject} (folder='{folder}')")
+                    logger.info(f"[TEST MODE] Skipping non-test msg: {subject} (folder='{folder}')")
                     continue
 
                 # Age filter
-                date_hdr = fetch_header_field(yahoo, uid, "DATE")
+                #date_hdr = fetch_header_field(yahoo, uid, "DATE")
                 if date_hdr:
                     try:
                         dt = parsedate_to_datetime(date_hdr)
@@ -457,24 +496,23 @@ def main():
                             dt = dt.replace(tzinfo=timezone.utc)
                         cutoff = datetime.now(timezone.utc) - timedelta(days=SKIP_DAYS)
                         if dt < cutoff:
-                            logger.info(f"Skipping {message_id} (older than {SKIP_DAYS} days)")
+                            logger.info(f"Skipping msg older than {SKIP_DAYS} days: {subject}")
                             continue
                     except Exception:
                         pass
 
                 # DRY RUN: log only, no side effects
                 if DRY_RUN:
-                    logger.info(f"[DRY RUN] Would sync {message_id} "
-                                f"(folder='{folder}', subject='{subject}')")
+                    logger.info(f"    [DRY RUN] Would sync {message_id} (subj='{subject}')")
                     processed_count += 1
                     continue
 
-                logger.info(f"Syncing {message_id} (subject='{subject}')")
+                logger.info(f"    Syncing msg: {message_id}:\n    subject='{subject}')")
 
                 try:
                     raw_msg = fetch_full_message(yahoo, uid)
                     if not raw_msg:
-                        raise RuntimeError("Failed to fetch full message")
+                        raise RuntimeError("Failed to fetch full msgs")
 
                     # Strip Reply-To pointing Yahoo address and ensure valid RFC822 reply-to
                     raw_msg_clean = sanitize_headers(raw_msg, YAHOO["username"])
@@ -485,31 +523,31 @@ def main():
                     if not internaldate:
                         # Fallback: current time in Gmail-friendly format
                         internaldate = imaplib.Time2Internaldate(time.time()).replace('"', '')
-                    logger.info(f"Got internaldate: {internaldate}")
+                    logger.info(f"    InternalDate: {internaldate}")
 
                     # get 'seen' status for message from yahoo
                     seen = yahoo_is_seen(yahoo, uid)
 
-                    logger.info(f"Importing message to Gmail (subject='{subject}')")
+                    logger.info(f"    Importing msg to Gmail (subj='{subject}')")
                     if raw_msg_clean is None:
-                        logger.info(f"ERROR: raw_msg is None for UID: {uid}")
+                        logger.info(f"    ERROR: raw_msg is None for UID: {uid}")
                         return None
                     if not isinstance(raw_msg_clean, (bytes, bytearray)):
-                        logger.info(f"ERROR: raw_msg is not bytes: {type(raw_msg_clean)}")
+                        logger.info(f"    ERROR: raw_msg is not bytes: {type(raw_msg_clean)}")
                         return None
                     #logger.info(f"raw_msg appears to be good, type: {type(raw_msg_clean)}")
 
                     import_raw_message(gmail, raw_msg_clean, internaldate, GMAIL_LABEL_ID, seen)
-                    logger.info(f"Deleting message from Yahoo (subject='{subject}')")
+                    logger.info(f"    Deleting msg from Yahoo (subj='{subject}')")
                     delete_from_yahoo(yahoo, uid)
-                    logger.info(f"Recording synced message to DB (subject='{subject}')")
+                    logger.info(f"    Recording synced msg to DB (subj='{subject}')")
                     record_synced(message_id, uid_str, folder)
 
                     logger.info(f"Synced and deleted {message_id}")
                     processed_count += 1
 
                 except Exception as e:
-                    logger.error(f"ERROR: Message sync failed: {e}\n. uid: {message_id}, subject: {subject}")
+                    logger.error(f"ERROR: Message sync failed: {e}\n    uid={message_id}  subj={subject}")
                     headers = fetch_headers(yahoo, uid)
                     error_logger.error(
                         f"Message-ID: {message_id}\n"
